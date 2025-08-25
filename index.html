@@ -1,0 +1,268 @@
+
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gestion Comptes (Mobile)</title>
+<style>
+  :root { --bg:#0f172a; --card:#111827; --muted:#9ca3af; --fg:#e5e7eb; --acc:#22d3ee; }
+  html,body { margin:0; padding:0; background:var(--bg); color:var(--fg); font-family: system-ui, -apple-system, Roboto, "Segoe UI", Arial, sans-serif; }
+  .container { padding: 16px; max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 12px 0; }
+  .card { background: var(--card); border-radius: 14px; padding: 12px; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+  .grid { display:grid; gap:10px; }
+  .row { display:flex; gap:10px; align-items:center; }
+  label { font-size: 12px; color: var(--muted); }
+  input, select, button, textarea {
+    width: 100%; padding: 12px; border-radius: 12px; border: 1px solid #222; background: #0b1220; color: var(--fg);
+    outline: none;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--acc); box-shadow: 0 0 0 3px rgba(34,211,238,.15); }
+  button { background: linear-gradient(180deg, #1f2937, #0b1220); border:1px solid #1f2937; font-weight: 600; }
+  .btn-primary { background: linear-gradient(180deg, #06b6d4, #0891b2); border: none; color:#03141a; }
+  .space { height: 12px; }
+  .list { display:grid; gap:8px; }
+  .item { background:#0b1220; border:1px solid #1f2937; border-radius:12px; padding:10px; display:flex; justify-content:space-between; align-items:center; }
+  .pill { font-size:12px; padding:4px 8px; border-radius:999px; background:#111827; border:1px solid #1f2937; color:var(--muted); }
+  .muted { color: var(--muted); font-size: 12px; }
+  .kpi { display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
+  .kpi .card { padding:10px; }
+  .kpi .val { font-weight:800; font-size:18px; }
+  .badge { background:#065f46; color:#d1fae5; padding:3px 8px; border-radius:999px; font-size:11px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Gestion des comptes — Mobile (25 → 25)</h1>
+
+  <div id="period" class="muted"></div>
+  <div class="space"></div>
+
+  <div class="card grid">
+    <div class="grid">
+      <div>
+        <label>Intitulé</label>
+        <input id="label" placeholder="Ex : Carrefour, EDF, Remboursement..." />
+      </div>
+      <div>
+        <label>Catégorie</label>
+        <select id="category">
+          <option value="DEPENSE_PERSO">Dépense Perso</option>
+          <option value="DEPENSE_TRAVAIL">Dépense Travail</option>
+          <option value="DEPENSE_LOISIR">Dépense Loisir</option>
+          <option value="DEPENSE_FAMILLE">Dépense Famille</option>
+          <option value="ENTREE_MAISON">Entrée Maison</option>
+          <option value="SORTIE_MAISON">Sortie Maison</option>
+        </select>
+      </div>
+      <div>
+        <label>Montant (€)</label>
+        <input id="amount" type="number" step="0.01" inputmode="decimal" placeholder="0,00" />
+      </div>
+    </div>
+    <div class="row">
+      <button class="btn-primary" onclick="addEntry()">Enregistrer</button>
+      <button onclick="exportCSV()">Exporter CSV (période)</button>
+      <button onclick="wipeAll()">Tout effacer</button>
+    </div>
+  </div>
+
+  <div class="space"></div>
+
+  <div class="kpi">
+    <div class="card"><div class="muted">Dépense Perso</div><div class="val" id="k_perso">0.00 €</div></div>
+    <div class="card"><div class="muted">Dépense Travail</div><div class="val" id="k_travail">0.00 €</div></div>
+    <div class="card"><div class="muted">Dépense Loisir</div><div class="val" id="k_loisir">0.00 €</div></div>
+    <div class="card"><div class="muted">Dépense Famille</div><div class="val" id="k_famille">0.00 €</div></div>
+    <div class="card"><div class="muted">Entrée Maison</div><div class="val" id="k_entree">0.00 €</div></div>
+    <div class="card"><div class="muted">Sortie Maison</div><div class="val" id="k_sortie">0.00 €</div></div>
+    <div class="card"><div class="muted">Total Dépenses</div><div class="val" id="k_total_dep">0.00 €</div></div>
+    <div class="card"><div class="muted">Solde Maison (Entrées − Sorties)</div><div class="val" id="k_solde">0.00 €</div></div>
+  </div>
+
+  <div class="space"></div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between;">
+      <div><strong>Saisies de la période</strong></div>
+      <div class="pill" id="count">0 ligne</div>
+    </div>
+    <div class="space"></div>
+    <div class="list" id="list"></div>
+  </div>
+
+  <div class="space"></div>
+  <div class="muted">Astuce : ajoute cette page à l’écran d’accueil pour l’ouvrir comme une appli.</div>
+
+</div>
+
+<script>
+const STORAGE_KEY = "gestion_comptes_data_v1";
+
+function today() {
+  const d = new Date();
+  d.setHours(0,0,0,0);
+  return d;
+}
+function monthNumber(d) { return d.getMonth() + 1; }
+function formatDate(d) {
+  const dd = String(d.getDate()).padStart(2,'0');
+  const mm = String(monthNumber(d)).padStart(2,'0');
+  const yyyy = d.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+}
+function euro(n) { return (n||0).toFixed(2).replace('.', ',') + " €"; }
+
+function currentPeriod(now=new Date()) {
+  const n = new Date(now); n.setHours(0,0,0,0);
+  let start;
+  if (n.getDate() >= 25) {
+    start = new Date(n.getFullYear(), n.getMonth(), 25);
+  } else {
+    start = new Date(n.getFullYear(), n.getMonth()-1, 25);
+  }
+  const end = new Date(start.getFullYear(), start.getMonth()+1, 25);
+  return [start, end];
+}
+
+function load() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+  } catch(e) {
+    return [];
+  }
+}
+function save(data) { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
+
+function addEntry() {
+  const label = document.getElementById("label").value.trim();
+  const category = document.getElementById("category").value;
+  const amt = parseFloat(document.getElementById("amount").value.replace(',','.'));
+  if (!label) { alert("Intitulé requis."); return; }
+  if (isNaN(amt)) { alert("Montant invalide."); return; }
+  const d = today();
+  const entry = {
+    id: Date.now(),
+    dateISO: d.toISOString().slice(0,10),
+    month: monthNumber(d),
+    label, category, amount: amt
+  };
+  const data = load();
+  data.unshift(entry);
+  save(data);
+  document.getElementById("label").value = "";
+  document.getElementById("amount").value = "";
+  render();
+}
+
+function wipeAll() {
+  if (confirm("Tout effacer ?")) {
+    save([]);
+    render();
+  }
+}
+
+function exportCSV() {
+  const [start, end] = currentPeriod(new Date());
+  const list = filterByPeriod(load(), start, end);
+  let csv = "Date;Mois;Intitule;Categorie;Montant
+";
+  list.forEach(e => {
+    csv += `${e.dateISO};${String(e.month).padStart(2,'0')};${e.label};${displayCat(e.category)};${e.amount.toFixed(2)}
+`;
+  });
+  const blob = new Blob([csv], {type:"text/csv;charset=utf-8"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "gestion_comptes_periode.csv";
+  document.body.appendChild(a);
+  a.click();
+  URL.revokeObjectURL(url);
+  a.remove();
+}
+
+function displayCat(c) {
+  switch(c) {
+    case "DEPENSE_PERSO": return "Dépense Perso";
+    case "DEPENSE_TRAVAIL": return "Dépense Travail";
+    case "DEPENSE_LOISIR": return "Dépense Loisir";
+    case "DEPENSE_FAMILLE": return "Dépense Famille";
+    case "ENTREE_MAISON": return "Entrée Maison";
+    case "SORTIE_MAISON": return "Sortie Maison";
+  }
+  return c;
+}
+
+function filterByPeriod(arr, start, end) {
+  const s = start.getTime();
+  const e = end.getTime();
+  return arr.filter(x => {
+    const t = new Date(x.dateISO + "T00:00:00").getTime();
+    return t >= s && t < e;
+  });
+}
+
+function render() {
+  const periodEl = document.getElementById("period");
+  const listEl = document.getElementById("list");
+  const countEl = document.getElementById("count");
+  const k = {
+    perso: document.getElementById("k_perso"),
+    travail: document.getElementById("k_travail"),
+    loisir: document.getElementById("k_loisir"),
+    famille: document.getElementById("k_famille"),
+    entree: document.getElementById("k_entree"),
+    sortie: document.getElementById("k_sortie"),
+    total_dep: document.getElementById("k_total_dep"),
+    solde: document.getElementById("k_solde"),
+  };
+
+  const now = new Date();
+  const [start, end] = currentPeriod(now);
+  periodEl.textContent = `Période: ${formatDate(start)} → ${formatDate(new Date(end.getTime()-86400000))}`;
+
+  const data = load();
+  const periodData = filterByPeriod(data, start, end);
+
+  const sum = (cat) => periodData.filter(x => x.category === cat).reduce((s, x) => s + x.amount, 0);
+  const dPerso = sum("DEPENSE_PERSO");
+  const dTrav = sum("DEPENSE_TRAVAIL");
+  const dLois = sum("DEPENSE_LOISIR");
+  const dFam = sum("DEPENSE_FAMILLE");
+  const eMaison = sum("ENTREE_MAISON");
+  const sMaison = sum("SORTIE_MAISON");
+  const totalDep = dPerso + dTrav + dLois + dFam;
+  const solde = eMaison - sMaison;
+
+  k.perso.textContent = euro(dPerso);
+  k.travail.textContent = euro(dTrav);
+  k.loisir.textContent = euro(dLois);
+  k.famille.textContent = euro(dFam);
+  k.entree.textContent = euro(eMaison);
+  k.sortie.textContent = euro(sMaison);
+  k.total_dep.textContent = euro(totalDep);
+  k.solde.textContent = euro(solde);
+
+  countEl.textContent = `${periodData.length} ${periodData.length>1?"lignes":"ligne"}`;
+  listEl.innerHTML = "";
+  periodData.forEach(e => {
+    const d = new Date(e.dateISO + "T00:00:00");
+    const div = document.createElement("div");
+    div.className = "item";
+    div.innerHTML = `
+      <div>
+        <div><strong>${e.label}</strong></div>
+        <div class="muted">${formatDate(d)} — Mois: ${String(e.month).padStart(2,'0')} — ${displayCat(e.category)}</div>
+      </div>
+      <div><span class="badge">${e.amount.toFixed(2)} €</span></div>
+    `;
+    listEl.appendChild(div);
+  });
+}
+
+render();
+</script>
+</body>
+</html>
