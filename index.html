@@ -4,21 +4,22 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Gestion Comptes (Mobile v3.1 debug)</title>
+<title>Gestion Comptes (Mobile v3.4)</title>
 <style>
-  :root { --bg:#0f172a; --card:#111827; --muted:#9ca3af; --fg:#e5e7eb; --acc:#22d3ee; --err:#ef4444; --ok:#22c55e; }
-  html,body { margin:0; padding:0; background:var(--bg); color:var(--fg); font-family: system-ui, -apple-system, Roboto, "Segoe UI", Arial, sans-serif; }
+  :root { --bg:#0f172a; --card:#111827; --muted:#9ca3af; --fg:#e5e7eb; --acc:#22d3ee; }
+  html,body { margin:0; padding:0; background:var(--bg); color:var(--fg); font-family: system-ui, sans-serif; }
   .container { padding: 16px; max-width: 900px; margin: 0 auto; }
-  h1 { font-size: 20px; margin: 0 0 12px 0; }
+  h1 { font-size: 20px; margin: 0 0 12px 0; display:flex; gap:10px; align-items:center; }
+  .badgeVer { font-size:11px; padding:4px 8px; border-radius:999px; background:#0b1220; border:1px solid #1f2937; color:#a7f3d0; }
   .card { background: var(--card); border-radius: 14px; padding: 12px; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
   .grid { display:grid; gap:10px; }
   .row { display:flex; gap:10px; align-items:center; flex-wrap: wrap; }
   label { font-size: 12px; color: var(--muted); }
-  input, select, button, textarea {
-    width: 100%; padding: 12px; border-radius: 12px; border: 1px solid #222; background: #0b1220; color: var(--fg);
-    outline: none;
+  input, select, button {
+    width: 100%; padding: 12px; border-radius: 12px; border: 1px solid #222;
+    background: #0b1220; color: var(--fg); outline: none;
   }
-  input:focus, select:focus, textarea:focus { border-color: var(--acc); box-shadow: 0 0 0 3px rgba(34,211,238,.15); }
+  input:focus, select:focus { border-color: var(--acc); box-shadow: 0 0 0 3px rgba(34,211,238,.15); }
   button { background: linear-gradient(180deg, #1f2937, #0b1220); border:1px solid #1f2937; font-weight: 600; }
   .btn-primary { background: linear-gradient(180deg, #06b6d4, #0891b2); border: none; color:#03141a; }
   .btn-danger { background: linear-gradient(180deg, #dc2626, #991b1b); border: none; }
@@ -36,14 +37,13 @@
   .msg.err { background:#3b0a0a; border:1px solid #7f1d1d; color:#fecaca; }
   .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background:#052e1b; color:#bbf7d0; padding:10px 14px; border-radius:12px; display:none; border:1px solid #14532d; }
   .status { font-size: 12px; color: var(--muted); }
-  .debug { font-size:12px; color:#a7f3d0; background:#064e3b; border:1px solid #065f46; padding:10px; border-radius:12px; }
 </style>
 </head>
 <body>
 <div class="container">
-  <h1>Gestion des comptes — Mobile (25 → 25) v3.1</h1>
+  <h1>Gestion des comptes — Mobile (25 → 25) <span class="badgeVer">v3.4</span></h1>
   <div id="period" class="muted"></div>
-  <div class="status" id="status">Initialisation…</div>
+  <div class="status" id="status">Stockage : localStorage</div>
   <div class="space"></div>
 
   <div class="card grid">
@@ -74,9 +74,6 @@
       <button onclick="exportCSV()">Exporter CSV (période)</button>
       <button class="btn-danger" onclick="wipeAll()">Tout effacer</button>
       <button onclick="resetCache()">Réinitialiser le cache</button>
-      <button onclick="addSample()">Test entrée</button>
-      <button onclick="forceLocalStorage()">Forcer localStorage</button>
-      <button onclick="forceMemory()">Forcer mémoire</button>
     </div>
   </div>
 
@@ -104,321 +101,83 @@
     <div class="list" id="list"></div>
   </div>
 
-  <div class="space"></div>
-  <div class="card debug" id="debugBox">Debug…</div>
-
   <div class="toast" id="toast">Enregistré ✔</div>
 
 </div>
 
 <script>
-/* ---------- Utils ---------- */
-function showMsg(text, ok=false) {
-  const el = document.getElementById("msg");
-  el.className = "msg " + (ok ? "ok" : "err");
-  el.textContent = text;
-  el.style.display = "block";
-  setTimeout(() => { el.style.display = "none"; }, 2500);
-}
-function toast(text="Enregistré ✔") {
-  const t = document.getElementById("toast");
-  t.textContent = text;
-  t.style.display = "block";
-  setTimeout(() => { t.style.display = "none"; }, 1200);
-}
-function today() {
-  const d = new Date();
-  d.setHours(0,0,0,0);
-  return d;
-}
-function monthNumber(d) { return d.getMonth() + 1; }
-function formatDate(d) {
-  const dd = String(d.getDate()).padStart(2,'0');
-  const mm = String(monthNumber(d)).padStart(2,'0');
-  const yyyy = d.getFullYear();
-  return `${dd}/${mm}/${yyyy}`;
-}
-function euro(n) { return (n||0).toFixed(2).replace('.', ',') + " €"; }
-function parseAmount(x) {
-  if (typeof x !== "string") return NaN;
-  const cleaned = x.replace(/\s/g,"").replace(",", ".");
-  return Number.parseFloat(cleaned);
-}
-function currentPeriod(now=new Date()) {
-  const n = new Date(now); n.setHours(0,0,0,0);
-  let start;
-  if (n.getDate() >= 25) start = new Date(n.getFullYear(), n.getMonth(), 25);
-  else start = new Date(n.getFullYear(), n.getMonth()-1, 25);
-  const end = new Date(start.getFullYear(), start.getMonth()+1, 25);
-  return [start, end];
-}
-function filterByPeriod(arr, start, end) {
-  const s = start.getTime();
-  const e = end.getTime();
-  return arr.filter(x => {
-    const t = new Date(x.dateISO + "T00:00:00").getTime();
-    return t >= s && t < e;
-  });
-}
+const LS_KEY=(location.origin+location.pathname.toLowerCase()+"_gc_v34").replace(/[^a-z0-9_]/g,"_");
+let memoryStore=[];
 
-/* ---------- Storage layer (IndexedDB -> localStorage -> mémoire) ---------- */
-const DB_NAME = "gcdb_v31";
-const STORE = "entries";
-const LS_KEY = (location.origin + location.pathname.toLowerCase() + "_gc_v31").replace(/[^a-z0-9_]/g,"_");
-let memoryStore = [];
-let storageMode = "memory";
+function status(t){document.getElementById("status").textContent=t;}
+function today(){const d=new Date();d.setHours(0,0,0,0);return d;}
+function monthNumber(d){return d.getMonth()+1;}
+function formatDate(d){const dd=String(d.getDate()).padStart(2,'0');const mm=String(monthNumber(d)).padStart(2,'0');const yyyy=d.getFullYear();return `${dd}/${mm}/${yyyy}`;}
+function euro(n){const v=Number(n||0);return v.toFixed(2).replace('.',',')+" €";}
+function parseAmount(x){if(x==null)return NaN;let s=String(x).trim();s=s.replace(/[€\s]/g,'');s=s.replace(',','.');if(!/^-?\d+(\.\d+)?$/.test(s))return NaN;return Number.parseFloat(s);}
+function buildLocalISO(d){const yyyy=d.getFullYear();const mm=String(d.getMonth()+1).padStart(2,'0');const dd=String(d.getDate()).padStart(2,'0');return `${yyyy}-${mm}-${dd}`;}
+function currentPeriod(now=new Date()){const n=new Date(now);n.setHours(0,0,0,0);const start=(n.getDate()>=25)?new Date(n.getFullYear(),n.getMonth(),25):new Date(n.getFullYear(),n.getMonth()-1,25);const end=new Date(start.getFullYear(),start.getMonth()+1,25);return[start,end];}
+function filterByPeriod(arr,start,end){const s=start.getTime();const e=end.getTime();return arr.filter(x=>{const[Y,M,D]=(x.dateISO||'').split('-').map(Number);if(!Y||!M||!D)return false;const t=new Date(Y,M-1,D).getTime();return t>=s&&t<e;});}
+function displayCat(c){switch(c){case"DEPENSE_PERSO":return"Dépense Perso";case"DEPENSE_TRAVAIL":return"Dépense Travail";case"DEPENSE_LOISIR":return"Dépense Loisir";case"DEPENSE_FAMILLE":return"Dépense Famille";case"ENTREE_MAISON":return"Entrée Maison";case"SORTIE_MAISON":return"Sortie Maison";}return c;}
 
-function status(text) { document.getElementById("status").textContent = text; }
-function updateDebug(extra="") {
-  storageAll().then(all => {
-    const [start, end] = currentPeriod(new Date());
-    const filtered = filterByPeriod(all, start, end);
-    const html = `
-      <div><strong>Mode stockage :</strong> ${storageMode}</div>
-      <div><strong>Clé :</strong> ${LS_KEY}</div>
-      <div><strong>Total brut (toutes données) :</strong> ${all.length}</div>
-      <div><strong>Total sur période :</strong> ${filtered.length}</div>
-      ${extra?`<div><strong>Note :</strong> ${extra}</div>`:""}
-    `;
-    document.getElementById("debugBox").innerHTML = html;
-  });
-}
+function load(){try{const raw=localStorage.getItem(LS_KEY);return raw?JSON.parse(raw):memoryStore;}catch(e){status("Stockage : mémoire");return memoryStore;}}
+function save(arr){memoryStore=arr.slice();try{localStorage.setItem(LS_KEY,JSON.stringify(arr));status("Stockage : localStorage");}catch(e){status("Stockage : mémoire");}}
 
-function idbOpen() {
-  return new Promise((resolve, reject) => {
-    if (!window.indexedDB) return reject(new Error("IndexedDB non dispo"));
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(STORE)) {
-        const store = db.createObjectStore(STORE, { keyPath: "id" });
-        store.createIndex("dateEpoch", "dateEpochDay");
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error || new Error("IndexedDB open error"));
-  });
+function onSave(){
+  const label=document.getElementById("label").value.trim();
+  const category=document.getElementById("category").value;
+  const amt=parseAmount(document.getElementById("amount").value);
+  if(!label){alert("Intitulé requis.");return;}
+  if(!Number.isFinite(amt)){alert("Montant invalide. Ex: 12,50 ou 12.50");return;}
+  const d=today();
+  const entry={id:Date.now(),dateISO:buildLocalISO(d),month:monthNumber(d),label,category,amount:amt};
+  const data=load();data.unshift(entry);save(data);
+  document.getElementById("label").value="";document.getElementById("amount").value="";
+  toast("Enregistré ✔");render();
 }
+function toast(text){const t=document.getElementById("toast");t.textContent=text;t.style.display="block";setTimeout(()=>t.style.display="none",1200);}
 
-async function idbAll() {
-  const db = await idbOpen();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, "readonly");
-    const st = tx.objectStore(STORE);
-    const req = st.getAll();
-    req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => reject(req.error);
-  });
+function exportCSV(){
+  const[start,end]=currentPeriod(new Date());
+  const list=filterByPeriod(load(),start,end);
+  if(list.length===0){alert("Rien à exporter sur cette période.");return;}
+  let csv="Date;Mois;Intitule;Categorie;Montant\n";
+  list.forEach(e=>{csv+=`${e.dateISO};${String(e.month).padStart(2,'0')};${e.label};${displayCat(e.category)};${Number(e.amount||0).toFixed(2)}\n`;});
+  const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");a.href=url;a.download="gestion_comptes_periode.csv";
+  document.body.appendChild(a);a.click();URL.revokeObjectURL(url);a.remove();
 }
-async function idbPut(entry) {
-  const db = await idbOpen();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, "readwrite");
-    tx.oncomplete = () => resolve(true);
-    tx.onerror = () => reject(tx.error);
-    tx.objectStore(STORE).put(entry);
-  });
-}
-async function idbClear() {
-  const db = await idbOpen();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, "readwrite");
-    tx.oncomplete = () => resolve(true);
-    tx.onerror = () => reject(tx.error);
-    tx.objectStore(STORE).clear();
-  });
-}
+function wipeAll(){if(!confirm("Tout effacer ?"))return;save([]);render();alert("Données effacées.");}
+function resetCache(){try{localStorage.removeItem(LS_KEY);}catch(e){}memoryStore=[];render();alert("Cache réinitialisé.");}
 
-function lsLoad() {
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw) || [];
-  } catch(e) { return []; }
-}
-function lsSave(arr) {
-  try { localStorage.setItem(LS_KEY, JSON.stringify(arr)); return true; }
-  catch(e) { return false; }
-}
-function lsClear() { try { localStorage.removeItem(LS_KEY); } catch(e) {} }
-
-async function storageInit() {
-  try {
-    await idbOpen();
-    storageMode = "indexedDB";
-    status("Stockage : IndexedDB");
-    updateDebug("IndexedDB OK");
-    return;
-  } catch(e) {}
-
-  if (lsSave(lsLoad())) {
-    storageMode = "localStorage";
-    status("Stockage : localStorage");
-    updateDebug("localStorage OK");
-    return;
-  }
-  storageMode = "memory";
-  status("Stockage : mémoire (temporaire)");
-  updateDebug("Fallback mémoire");
-}
-
-async function storageAll() {
-  if (storageMode === "indexedDB") return await idbAll();
-  if (storageMode === "localStorage") return lsLoad();
-  return memoryStore;
-}
-async function storagePut(entry) {
-  if (storageMode === "indexedDB") return await idbPut(entry);
-  if (storageMode === "localStorage") {
-    const arr = lsLoad();
-    arr.unshift(entry);
-    return lsSave(arr);
-  }
-  memoryStore.unshift(entry);
-  return true;
-}
-async function storageClear() {
-  if (storageMode === "indexedDB") return await idbClear();
-  if (storageMode === "localStorage") { lsClear(); return true; }
-  memoryStore = []; return true;
-}
-
-/* ---------- Controls ---------- */
-function addSample() {
-  document.getElementById("label").value = "Test";
-  document.getElementById("amount").value = "1,23";
-  onSave();
-}
-function forceLocalStorage() {
-  try { localStorage.setItem("__test", "1"); localStorage.removeItem("__test"); storageMode="localStorage"; status("Stockage forcé : localStorage"); updateDebug("Forcé localStorage"); render(); }
-  catch(e){ showMsg("localStorage indisponible", false); }
-}
-function forceMemory() {
-  storageMode="memory";
-  status("Stockage forcé : mémoire");
-  updateDebug("Forcé mémoire");
-  render();
-}
-function resetCache() {
-  try { localStorage.removeItem(LS_KEY); } catch(e) {}
-  storageClear();
-  render();
-  showMsg("Cache réinitialisé", true);
-}
-
-/* ---------- App ---------- */
-async function init() {
-  await storageInit();
-  render();
-}
-async function onSave() {
-  const label = document.getElementById("label").value.trim();
-  const category = document.getElementById("category").value;
-  const amtRaw = document.getElementById("amount").value;
-  const amt = parseAmount(amtRaw);
-  if (!label) { showMsg("Intitulé requis."); return; }
-  if (!Number.isFinite(amt)) { showMsg("Montant invalide. Ex: 12.50 ou 12,50"); return; }
-  const d = today();
-  const entry = {
-    id: Date.now(),
-    dateISO: d.toISOString().slice(0,10),
-    dateEpochDay: Math.floor(d.getTime()/86400000),
-    month: monthNumber(d),
-    label, category, amount: amt
-  };
-  await storagePut(entry);
-  document.getElementById("label").value = "";
-  document.getElementById("amount").value = "";
-  toast("Enregistré ✔");
-  render();
-}
-async function exportCSV() {
-  const [start, end] = currentPeriod(new Date());
-  const list = filterByPeriod(await storageAll(), start, end);
-  if (list.length === 0) { showMsg("Rien à exporter sur cette période."); return; }
-  let csv = "Date;Mois;Intitule;Categorie;Montant\n";
-  list.forEach(e => {
-    csv += `${e.dateISO};${String(e.month).padStart(2,'0')};${e.label};${displayCat(e.category)};${e.amount.toFixed(2)}\n`;
-  });
-  const blob = new Blob([csv], {type:"text/csv;charset=utf-8"});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "gestion_comptes_periode.csv";
-  document.body.appendChild(a);
-  a.click();
-  URL.revokeObjectURL(url);
-  a.remove();
-}
-function displayCat(c) {
-  switch(c) {
-    case "DEPENSE_PERSO": return "Dépense Perso";
-    case "DEPENSE_TRAVAIL": return "Dépense Travail";
-    case "DEPENSE_LOISIR": return "Dépense Loisir";
-    case "DEPENSE_FAMILLE": return "Dépense Famille";
-    case "ENTREE_MAISON": return "Entrée Maison";
-    case "SORTIE_MAISON": return "Sortie Maison";
-  }
-  return c;
-}
-async function render() {
-  const periodEl = document.getElementById("period");
-  periodEl.textContent = (function(){ const [s,e]=currentPeriod(new Date()); return `Période: ${formatDate(s)} → ${formatDate(new Date(e.getTime()-86400000))}`; })();
-  const listEl = document.getElementById("list");
-  const countEl = document.getElementById("count");
-  const k = {
-    perso: document.getElementById("k_perso"),
-    travail: document.getElementById("k_travail"),
-    loisir: document.getElementById("k_loisir"),
-    famille: document.getElementById("k_famille"),
-    entree: document.getElementById("k_entree"),
-    sortie: document.getElementById("k_sortie"),
-    total_dep: document.getElementById("k_total_dep"),
-    solde: document.getElementById("k_solde"),
-  };
-
-  const [start, end] = currentPeriod(new Date());
-  const data = await storageAll();
-  updateDebug();
-  const periodData = filterByPeriod(data, start, end);
-
-  const sum = (cat) => periodData.filter(x => x.category === cat).reduce((s, x) => s + x.amount, 0);
-  const dPerso = sum("DEPENSE_PERSO");
-  const dTrav = sum("DEPENSE_TRAVAIL");
-  const dLois = sum("DEPENSE_LOISIR");
-  const dFam = sum("DEPENSE_FAMILLE");
-  const eMaison = sum("ENTREE_MAISON");
-  const sMaison = sum("SORTIE_MAISON");
-  const totalDep = dPerso + dTrav + dLois + dFam;
-  const solde = eMaison - sMaison;
-
-  k.perso.textContent = euro(dPerso);
-  k.travail.textContent = euro(dTrav);
-  k.loisir.textContent = euro(dLois);
-  k.famille.textContent = euro(dFam);
-  k.entree.textContent = euro(eMaison);
-  k.sortie.textContent = euro(sMaison);
-  k.total_dep.textContent = euro(totalDep);
-  k.solde.textContent = euro(solde);
-
-  countEl.textContent = `${periodData.length} ${periodData.length>1?"lignes":"ligne"}`;
-  listEl.innerHTML = "";
-  periodData.forEach(e => {
-    const d = new Date(e.dateISO + "T00:00:00");
-    const div = document.createElement("div");
-    div.className = "item";
-    div.innerHTML = `
-      <div>
-        <div><strong>${e.label}</strong></div>
-        <div class="muted">${formatDate(d)} — Mois: ${String(e.month).padStart(2,'0')} — ${displayCat(e.category)}</div>
-      </div>
-      <div><span class="badge">${e.amount.toFixed(2)} €</span></div>
-    `;
+function render(){
+  const[s,e]=currentPeriod(new Date());
+  document.getElementById("period").textContent=`Période: ${formatDate(s)} → ${formatDate(new Date(e.getTime()-86400000))}`;
+  const data=load();
+  const periodData=filterByPeriod(data,s,e);
+  const sum=(cat)=>periodData.filter(x=>x.category===cat).reduce((t,x)=>t+Number(x.amount||0),0);
+  const dPerso=sum("DEPENSE_PERSO"),dTrav=sum("DEPENSE_TRAVAIL"),dLois=sum("DEPENSE_LOISIR"),dFam=sum("DEPENSE_FAMILLE"),eMaison=sum("ENTREE_MAISON"),sMaison=sum("SORTIE_MAISON");
+  document.getElementById("k_perso").textContent=euro(dPerso);
+  document.getElementById("k_travail").textContent=euro(dTrav);
+  document.getElementById("k_loisir").textContent=euro(dLois);
+  document.getElementById("k_famille").textContent=euro(dFam);
+  document.getElementById("k_entree").textContent=euro(eMaison);
+  document.getElementById("k_sortie").textContent=euro(sMaison);
+  document.getElementById("k_total_dep").textContent=euro(dPerso+dTrav+dLois+dFam);
+  document.getElementById("k_solde").textContent=euro(eMaison-sMaison);
+  const listEl=document.getElementById("list"),countEl=document.getElementById("count");
+  countEl.textContent=`${periodData.length} ${periodData.length>1?"lignes":"ligne"}`;
+  listEl.innerHTML="";
+  periodData.forEach(e=>{
+    const[Y,M,D]=(e.dateISO||"").split("-").map(Number);
+    const d=new Date(Y||1970,(M||1)-1,D||1);
+    const div=document.createElement("div");div.className="item";
+    div.innerHTML=`<div><div><strong>${e.label}</strong></div><div class="muted">${formatDate(d)} — Mois: ${String(e.month||0).padStart(2,'0')} — ${displayCat(e.category)}</div></div><div><span class="badge">${euro(Number(e.amount||0))}</span></div>`;
     listEl.appendChild(div);
   });
 }
-
-init();
+render();
 </script>
 </body>
 </html>
