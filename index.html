@@ -4,7 +4,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Gestion Comptes (Mobile v2)</title>
+<title>Gestion Comptes (Mobile v3)</title>
 <style>
   :root { --bg:#0f172a; --card:#111827; --muted:#9ca3af; --fg:#e5e7eb; --acc:#22d3ee; --err:#ef4444; --ok:#22c55e; }
   html,body { margin:0; padding:0; background:var(--bg); color:var(--fg); font-family: system-ui, -apple-system, Roboto, "Segoe UI", Arial, sans-serif; }
@@ -35,12 +35,14 @@
   .msg.ok { background:#052e1b; border:1px solid #14532d; color:#bbf7d0; }
   .msg.err { background:#3b0a0a; border:1px solid #7f1d1d; color:#fecaca; }
   .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background:#052e1b; color:#bbf7d0; padding:10px 14px; border-radius:12px; display:none; border:1px solid #14532d; }
+  .status { font-size: 12px; color: var(--muted); }
 </style>
 </head>
 <body>
 <div class="container">
-  <h1>Gestion des comptes — Mobile (25 → 25) v2</h1>
+  <h1>Gestion des comptes — Mobile (25 → 25) v3</h1>
   <div id="period" class="muted"></div>
+  <div class="status" id="status">Initialisation…</div>
   <div class="space"></div>
 
   <div class="card grid">
@@ -67,12 +69,12 @@
       </div>
     </div>
     <div class="row">
-      <button class="btn-primary" onclick="addEntry()">Enregistrer</button>
+      <button class="btn-primary" onclick="onSave()">Enregistrer</button>
       <button onclick="exportCSV()">Exporter CSV (période)</button>
       <button class="btn-danger" onclick="wipeAll()">Tout effacer</button>
       <button onclick="resetCache()">Réinitialiser le cache</button>
     </div>
-    <div class="muted">Si ça ne valide pas : essaye <strong>1,23</strong> ou <strong>1.23</strong> pour les décimales. Si le site semble “bloqué”, fais un <em>rechargement dur</em> (Chrome : Menu ⋮ → Informations → Effacer & réinitialiser).</div>
+    <div class="muted">Si ça ne valide pas : essaye <strong>1,23</strong> ou <strong>1.23</strong>. En cas de souci, clique <em>Réinitialiser le cache</em> puis recharge.</div>
   </div>
 
   <div class="space"></div>
@@ -104,23 +106,20 @@
 </div>
 
 <script>
-const STORAGE_KEY = (location.host + location.pathname + "_gestion_comptes_data_v2").replace(/[^a-zA-Z0-9_]/g,"_");
-let memoryStore = []; // fallback si localStorage KO
-
+/* ---------- Utils ---------- */
 function showMsg(text, ok=false) {
   const el = document.getElementById("msg");
   el.className = "msg " + (ok ? "ok" : "err");
   el.textContent = text;
   el.style.display = "block";
-  setTimeout(() => { el.style.display = "none"; }, 3000);
+  setTimeout(() => { el.style.display = "none"; }, 2500);
 }
 function toast(text="Enregistré ✔") {
   const t = document.getElementById("toast");
   t.textContent = text;
   t.style.display = "block";
-  setTimeout(() => { t.style.display = "none"; }, 1500);
+  setTimeout(() => { t.style.display = "none"; }, 1200);
 }
-
 function today() {
   const d = new Date();
   d.setHours(0,0,0,0);
@@ -134,7 +133,11 @@ function formatDate(d) {
   return `${dd}/${mm}/${yyyy}`;
 }
 function euro(n) { return (n||0).toFixed(2).replace('.', ',') + " €"; }
-
+function parseAmount(x) {
+  if (typeof x !== "string") return NaN;
+  const cleaned = x.replace(/\s/g,"").replace(",", ".");
+  return Number.parseFloat(cleaned);
+}
 function currentPeriod(now=new Date()) {
   const n = new Date(now); n.setHours(0,0,0,0);
   let start;
@@ -143,38 +146,138 @@ function currentPeriod(now=new Date()) {
   const end = new Date(start.getFullYear(), start.getMonth()+1, 25);
   return [start, end];
 }
+function filterByPeriod(arr, start, end) {
+  const s = start.getTime();
+  const e = end.getTime();
+  return arr.filter(x => {
+    const t = new Date(x.dateISO + "T00:00:00").getTime();
+    return t >= s && t < e;
+  });
+}
 
-// Storage helpers (defensive)
-function safeGetItem(key) {
-  try { return localStorage.getItem(key); } catch(e) { return null; }
+/* ---------- Storage layer (IndexedDB -> localStorage -> mémoire) ---------- */
+const DB_NAME = "gcdb_v3";
+const STORE = "entries";
+const LS_KEY = (location.host + location.pathname + "_gc_v3").replace(/[^a-zA-Z0-9_]/g,"_");
+let memoryStore = [];
+
+function status(text) { document.getElementById("status").textContent = text; }
+
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) return reject(new Error("IndexedDB non disponible"));
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = (e) => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(STORE)) {
+        const store = db.createObjectStore(STORE, { keyPath: "id" });
+        store.createIndex("dateEpoch", "dateEpochDay");
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error("IndexedDB open error"));
+  });
 }
-function safeSetItem(key, val) {
-  try { localStorage.setItem(key, val); return true; } catch(e) { return false; }
+
+async function idbAll() {
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readonly");
+    const st = tx.objectStore(STORE);
+    const req = st.getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
 }
-function load() {
-  const raw = safeGetItem(STORAGE_KEY);
-  if (!raw) return memoryStore;
-  try { return JSON.parse(raw) || []; } catch(e) { return memoryStore; }
+async function idbPut(entry) {
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite");
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+    tx.objectStore(STORE).put(entry);
+  });
 }
-function save(data) {
-  memoryStore = data.slice();
-  const ok = safeSetItem(STORAGE_KEY, JSON.stringify(data));
-  return ok;
+async function idbClear() {
+  const db = await idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite");
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+    tx.objectStore(STORE).clear();
+  });
 }
-function resetCache() {
-  try { localStorage.removeItem(STORAGE_KEY); } catch(e) {}
-  memoryStore = [];
+
+function lsLoad() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) || [];
+  } catch(e) { return []; }
+}
+function lsSave(arr) {
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(arr));
+    return true;
+  } catch(e) { return false; }
+}
+function lsClear() { try { localStorage.removeItem(LS_KEY); } catch(e) {} }
+
+/* Abstraction high-level */
+let storageMode = "memory"; // "idb" | "localStorage" | "memory"
+async function storageInit() {
+  // Try IndexedDB
+  try {
+    await idbOpen();
+    storageMode = "idb";
+    status("Stockage : IndexedDB");
+    return;
+  } catch(e) {}
+
+  // Try localStorage
+  const ok = lsSave(lsLoad());
+  if (ok) {
+    storageMode = "localStorage";
+    status("Stockage : localStorage");
+    return;
+  }
+
+  // Fallback memory
+  storageMode = "memory";
+  status("Stockage : mémoire (temporaire)");
+}
+
+async function storageAll() {
+  if (storageMode === "idb") return await idbAll();
+  if (storageMode === "localStorage") return lsLoad();
+  return memoryStore;
+}
+async function storagePut(entry) {
+  if (storageMode === "idb") return await idbPut(entry);
+  if (storageMode === "localStorage") {
+    const arr = lsLoad();
+    arr.unshift(entry);
+    return lsSave(arr);
+  }
+  memoryStore.unshift(entry);
+  return true;
+}
+async function storageClear() {
+  if (storageMode === "idb") return await idbClear();
+  if (storageMode === "localStorage") { lsClear(); return true; }
+  memoryStore = []; return true;
+}
+
+/* ---------- App logic ---------- */
+async function init() {
+  await storageInit();
   render();
-  showMsg("Cache réinitialisé. Si besoin, recharge la page.", true);
 }
-
-function parseAmount(x) {
-  if (typeof x !== "string") return NaN;
-  const cleaned = x.replace(/\s/g,"").replace(",", ".");
-  return Number.parseFloat(cleaned);
+function periodLabel() {
+  const [start, end] = currentPeriod(new Date());
+  return `Période: ${formatDate(start)} → ${formatDate(new Date(end.getTime()-86400000))}`;
 }
-
-function addEntry() {
+async function onSave() {
   const label = document.getElementById("label").value.trim();
   const category = document.getElementById("category").value;
   const amtRaw = document.getElementById("amount").value;
@@ -185,21 +288,35 @@ function addEntry() {
   const entry = {
     id: Date.now(),
     dateISO: d.toISOString().slice(0,10),
+    dateEpochDay: Math.floor(d.getTime()/86400000),
     month: monthNumber(d),
     label, category, amount: amt
   };
-  const data = load();
-  data.unshift(entry);
-  save(data);
-  document.getElementById("label").value = "";
-  document.getElementById("amount").value = "";
-  toast("Enregistré ✔");
-  render();
+  try {
+    await storagePut(entry);
+    document.getElementById("label").value = "";
+    document.getElementById("amount").value = "";
+    toast("Enregistré ✔");
+    render();
+  } catch (e) {
+    showMsg("Erreur d'enregistrement : " + (e?.message || e), false);
+  }
 }
-
-function exportCSV() {
+async function wipeAll() {
+  if (!confirm("Tout effacer ?")) return;
+  await storageClear();
+  render();
+  showMsg("Données effacées.", true);
+}
+function resetCache() {
+  // Pour GitHub Pages : effacer localStorage + bascule possible sur IDB
+  try { localStorage.removeItem(LS_KEY); } catch(e) {}
+  render();
+  showMsg("Cache réinitialisé. Recharge si besoin.", true);
+}
+async function exportCSV() {
   const [start, end] = currentPeriod(new Date());
-  const list = filterByPeriod(load(), start, end);
+  const list = filterByPeriod(await storageAll(), start, end);
   if (list.length === 0) { showMsg("Rien à exporter sur cette période."); return; }
   let csv = "Date;Mois;Intitule;Categorie;Montant\n";
   list.forEach(e => {
@@ -215,7 +332,6 @@ function exportCSV() {
   URL.revokeObjectURL(url);
   a.remove();
 }
-
 function displayCat(c) {
   switch(c) {
     case "DEPENSE_PERSO": return "Dépense Perso";
@@ -227,18 +343,8 @@ function displayCat(c) {
   }
   return c;
 }
-
-function filterByPeriod(arr, start, end) {
-  const s = start.getTime();
-  const e = end.getTime();
-  return arr.filter(x => {
-    const t = new Date(x.dateISO + "T00:00:00").getTime();
-    return t >= s && t < e;
-  });
-}
-
-function render() {
-  const periodEl = document.getElementById("period");
+async function render() {
+  document.getElementById("period").textContent = periodLabel();
   const listEl = document.getElementById("list");
   const countEl = document.getElementById("count");
   const k = {
@@ -252,11 +358,8 @@ function render() {
     solde: document.getElementById("k_solde"),
   };
 
-  const now = new Date();
-  const [start, end] = currentPeriod(now);
-  periodEl.textContent = `Période: ${formatDate(start)} → ${formatDate(new Date(end.getTime()-86400000))}`;
-
-  const data = load();
+  const [start, end] = currentPeriod(new Date());
+  const data = await storageAll();
   const periodData = filterByPeriod(data, start, end);
 
   const sum = (cat) => periodData.filter(x => x.category === cat).reduce((s, x) => s + x.amount, 0);
@@ -295,7 +398,7 @@ function render() {
   });
 }
 
-render();
+init();
 </script>
 </body>
 </html>
