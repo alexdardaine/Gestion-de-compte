@@ -4,7 +4,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Gestion Comptes (Mobile v3)</title>
+<title>Gestion Comptes (Mobile v3.1 debug)</title>
 <style>
   :root { --bg:#0f172a; --card:#111827; --muted:#9ca3af; --fg:#e5e7eb; --acc:#22d3ee; --err:#ef4444; --ok:#22c55e; }
   html,body { margin:0; padding:0; background:var(--bg); color:var(--fg); font-family: system-ui, -apple-system, Roboto, "Segoe UI", Arial, sans-serif; }
@@ -36,11 +36,12 @@
   .msg.err { background:#3b0a0a; border:1px solid #7f1d1d; color:#fecaca; }
   .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background:#052e1b; color:#bbf7d0; padding:10px 14px; border-radius:12px; display:none; border:1px solid #14532d; }
   .status { font-size: 12px; color: var(--muted); }
+  .debug { font-size:12px; color:#a7f3d0; background:#064e3b; border:1px solid #065f46; padding:10px; border-radius:12px; }
 </style>
 </head>
 <body>
 <div class="container">
-  <h1>Gestion des comptes — Mobile (25 → 25) v3</h1>
+  <h1>Gestion des comptes — Mobile (25 → 25) v3.1</h1>
   <div id="period" class="muted"></div>
   <div class="status" id="status">Initialisation…</div>
   <div class="space"></div>
@@ -73,8 +74,10 @@
       <button onclick="exportCSV()">Exporter CSV (période)</button>
       <button class="btn-danger" onclick="wipeAll()">Tout effacer</button>
       <button onclick="resetCache()">Réinitialiser le cache</button>
+      <button onclick="addSample()">Test entrée</button>
+      <button onclick="forceLocalStorage()">Forcer localStorage</button>
+      <button onclick="forceMemory()">Forcer mémoire</button>
     </div>
-    <div class="muted">Si ça ne valide pas : essaye <strong>1,23</strong> ou <strong>1.23</strong>. En cas de souci, clique <em>Réinitialiser le cache</em> puis recharge.</div>
   </div>
 
   <div class="space"></div>
@@ -100,6 +103,9 @@
     <div class="space"></div>
     <div class="list" id="list"></div>
   </div>
+
+  <div class="space"></div>
+  <div class="card debug" id="debugBox">Debug…</div>
 
   <div class="toast" id="toast">Enregistré ✔</div>
 
@@ -156,18 +162,33 @@ function filterByPeriod(arr, start, end) {
 }
 
 /* ---------- Storage layer (IndexedDB -> localStorage -> mémoire) ---------- */
-const DB_NAME = "gcdb_v3";
+const DB_NAME = "gcdb_v31";
 const STORE = "entries";
-const LS_KEY = (location.host + location.pathname + "_gc_v3").replace(/[^a-zA-Z0-9_]/g,"_");
+const LS_KEY = (location.origin + location.pathname.toLowerCase() + "_gc_v31").replace(/[^a-z0-9_]/g,"_");
 let memoryStore = [];
+let storageMode = "memory";
 
 function status(text) { document.getElementById("status").textContent = text; }
+function updateDebug(extra="") {
+  storageAll().then(all => {
+    const [start, end] = currentPeriod(new Date());
+    const filtered = filterByPeriod(all, start, end);
+    const html = `
+      <div><strong>Mode stockage :</strong> ${storageMode}</div>
+      <div><strong>Clé :</strong> ${LS_KEY}</div>
+      <div><strong>Total brut (toutes données) :</strong> ${all.length}</div>
+      <div><strong>Total sur période :</strong> ${filtered.length}</div>
+      ${extra?`<div><strong>Note :</strong> ${extra}</div>`:""}
+    `;
+    document.getElementById("debugBox").innerHTML = html;
+  });
+}
 
 function idbOpen() {
   return new Promise((resolve, reject) => {
-    if (!window.indexedDB) return reject(new Error("IndexedDB non disponible"));
+    if (!window.indexedDB) return reject(new Error("IndexedDB non dispo"));
     const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = (e) => {
+    req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) {
         const store = db.createObjectStore(STORE, { keyPath: "id" });
@@ -216,44 +237,38 @@ function lsLoad() {
   } catch(e) { return []; }
 }
 function lsSave(arr) {
-  try {
-    localStorage.setItem(LS_KEY, JSON.stringify(arr));
-    return true;
-  } catch(e) { return false; }
+  try { localStorage.setItem(LS_KEY, JSON.stringify(arr)); return true; }
+  catch(e) { return false; }
 }
 function lsClear() { try { localStorage.removeItem(LS_KEY); } catch(e) {} }
 
-/* Abstraction high-level */
-let storageMode = "memory"; // "idb" | "localStorage" | "memory"
 async function storageInit() {
-  // Try IndexedDB
   try {
     await idbOpen();
-    storageMode = "idb";
+    storageMode = "indexedDB";
     status("Stockage : IndexedDB");
+    updateDebug("IndexedDB OK");
     return;
   } catch(e) {}
 
-  // Try localStorage
-  const ok = lsSave(lsLoad());
-  if (ok) {
+  if (lsSave(lsLoad())) {
     storageMode = "localStorage";
     status("Stockage : localStorage");
+    updateDebug("localStorage OK");
     return;
   }
-
-  // Fallback memory
   storageMode = "memory";
   status("Stockage : mémoire (temporaire)");
+  updateDebug("Fallback mémoire");
 }
 
 async function storageAll() {
-  if (storageMode === "idb") return await idbAll();
+  if (storageMode === "indexedDB") return await idbAll();
   if (storageMode === "localStorage") return lsLoad();
   return memoryStore;
 }
 async function storagePut(entry) {
-  if (storageMode === "idb") return await idbPut(entry);
+  if (storageMode === "indexedDB") return await idbPut(entry);
   if (storageMode === "localStorage") {
     const arr = lsLoad();
     arr.unshift(entry);
@@ -263,19 +278,38 @@ async function storagePut(entry) {
   return true;
 }
 async function storageClear() {
-  if (storageMode === "idb") return await idbClear();
+  if (storageMode === "indexedDB") return await idbClear();
   if (storageMode === "localStorage") { lsClear(); return true; }
   memoryStore = []; return true;
 }
 
-/* ---------- App logic ---------- */
+/* ---------- Controls ---------- */
+function addSample() {
+  document.getElementById("label").value = "Test";
+  document.getElementById("amount").value = "1,23";
+  onSave();
+}
+function forceLocalStorage() {
+  try { localStorage.setItem("__test", "1"); localStorage.removeItem("__test"); storageMode="localStorage"; status("Stockage forcé : localStorage"); updateDebug("Forcé localStorage"); render(); }
+  catch(e){ showMsg("localStorage indisponible", false); }
+}
+function forceMemory() {
+  storageMode="memory";
+  status("Stockage forcé : mémoire");
+  updateDebug("Forcé mémoire");
+  render();
+}
+function resetCache() {
+  try { localStorage.removeItem(LS_KEY); } catch(e) {}
+  storageClear();
+  render();
+  showMsg("Cache réinitialisé", true);
+}
+
+/* ---------- App ---------- */
 async function init() {
   await storageInit();
   render();
-}
-function periodLabel() {
-  const [start, end] = currentPeriod(new Date());
-  return `Période: ${formatDate(start)} → ${formatDate(new Date(end.getTime()-86400000))}`;
 }
 async function onSave() {
   const label = document.getElementById("label").value.trim();
@@ -292,27 +326,11 @@ async function onSave() {
     month: monthNumber(d),
     label, category, amount: amt
   };
-  try {
-    await storagePut(entry);
-    document.getElementById("label").value = "";
-    document.getElementById("amount").value = "";
-    toast("Enregistré ✔");
-    render();
-  } catch (e) {
-    showMsg("Erreur d'enregistrement : " + (e?.message || e), false);
-  }
-}
-async function wipeAll() {
-  if (!confirm("Tout effacer ?")) return;
-  await storageClear();
+  await storagePut(entry);
+  document.getElementById("label").value = "";
+  document.getElementById("amount").value = "";
+  toast("Enregistré ✔");
   render();
-  showMsg("Données effacées.", true);
-}
-function resetCache() {
-  // Pour GitHub Pages : effacer localStorage + bascule possible sur IDB
-  try { localStorage.removeItem(LS_KEY); } catch(e) {}
-  render();
-  showMsg("Cache réinitialisé. Recharge si besoin.", true);
 }
 async function exportCSV() {
   const [start, end] = currentPeriod(new Date());
@@ -344,7 +362,8 @@ function displayCat(c) {
   return c;
 }
 async function render() {
-  document.getElementById("period").textContent = periodLabel();
+  const periodEl = document.getElementById("period");
+  periodEl.textContent = (function(){ const [s,e]=currentPeriod(new Date()); return `Période: ${formatDate(s)} → ${formatDate(new Date(e.getTime()-86400000))}`; })();
   const listEl = document.getElementById("list");
   const countEl = document.getElementById("count");
   const k = {
@@ -360,6 +379,7 @@ async function render() {
 
   const [start, end] = currentPeriod(new Date());
   const data = await storageAll();
+  updateDebug();
   const periodData = filterByPeriod(data, start, end);
 
   const sum = (cat) => periodData.filter(x => x.category === cat).reduce((s, x) => s + x.amount, 0);
